@@ -2,11 +2,14 @@ const express = require('express')
 const expressGraphQL = require('express-graphql').graphqlHTTP
 const sqlite3 = require("sqlite3").verbose();
 const util = require("util");
+
+// Connecting to the database
 const db = new sqlite3.Database("./uni.db", sqlite3.OPEN_READWRITE, (err) => {
     if (err) return console.error(err.message);
     console.log("Connection to DataBase Successful");
 });
 
+// Async issue fixes 
 db.all = util.promisify(db.all);
 db.get = util.promisify(db.get);
 
@@ -30,22 +33,7 @@ const{
 const { resolve } = require('path');
 const app = express()
 
-function runSQLite(SQLcommand){
-    const data = {};
-
-    db.all(SQLcommand, [], (err, rows) => {
-        if (err) return console.error(err.message);
-        data = rows
-    })
-    
-
-    db.close((err) => {
-        if (err) return console.error(err.message);
-    });
-
-    return data
-}
-
+// GraphQL Type representing a university subject.
 const SubjectType = new GraphQLObjectType({
     name: "Subject",
     description: "This represents a subject object",
@@ -63,6 +51,7 @@ const SubjectType = new GraphQLObjectType({
     })
 })
 
+// GraphQL Type representing a university professor.
 const ProfessorType = new GraphQLObjectType({
     name: "Professor",
     description: "This represents a professor object",
@@ -74,13 +63,13 @@ const ProfessorType = new GraphQLObjectType({
         subjects: {
             type: new GraphQLList(SubjectType),
             resolve: (professor) => {
-                // return subjects.filter(subject => subject.profID === professor.id)
                 return db.all('SELECT * FROM subjects WHERE profID = ?', [professor.id]);
             }
         }
     })
 })
 
+// All available Queries
 const RootQueryType = new GraphQLObjectType({
     name: 'Query',
     description: 'Root Query',
@@ -114,10 +103,13 @@ const RootQueryType = new GraphQLObjectType({
     })
 })
 
+// All available Mutations.
+// Add, Update & Delete mutations for subjects and professors.
 const RootMutationType = new GraphQLObjectType({
     name: 'Mutation',
     description: 'Root Mutation',
     fields: () => ({
+        // Professor Mutations
         addProfessor: {
             type: ProfessorType,
             description: "Add a professor",
@@ -157,6 +149,7 @@ const RootMutationType = new GraphQLObjectType({
             }
         },
 
+        // Subject Mutations
         addSubject: {
             type: SubjectType,
             description: "Add a subject",
@@ -198,6 +191,7 @@ const RootMutationType = new GraphQLObjectType({
     })
 })
 
+// Μy shema
 const schema = new GraphQLSchema({
     query: RootQueryType,
     mutation: RootMutationType
