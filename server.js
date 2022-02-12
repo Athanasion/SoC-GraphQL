@@ -1,5 +1,24 @@
 const express = require('express')
 const expressGraphQL = require('express-graphql').graphqlHTTP
+const sqlite3 = require("sqlite3").verbose();
+const util = require("util");
+const db = new sqlite3.Database("./uni.db", sqlite3.OPEN_READWRITE, (err) => {
+    if (err) return console.error(err.message);
+    console.log("Connection to DataBase Successful");
+});
+
+db.all = util.promisify(db.all);
+db.get = util.promisify(db.get);
+
+async function db_run(sql, params)  {
+    return new Promise((res, rej) => {
+        db.run(sql, params, function (err) {
+            if (err) rej(err);
+            res(this.lastID);
+        })
+    }) 
+}
+
 const{
     GraphQLSchema,
     GraphQLObjectType,
@@ -7,24 +26,25 @@ const{
     GraphQLList,
     GraphQLInt,
     GraphQLNonNull
-} = require('graphql')
+} = require('graphql');
+const { resolve } = require('path');
 const app = express()
 
-const professors = [
-    { id: 1, name: "Glenn",  surname: "Purver",   telephoneNumber: "4259600470" },
-    { id: 2, name: "Dougie", surname: "Amys",     telephoneNumber: "2494364944" },
-    { id: 3, name: "Rakel" , surname: "Bedberry", telephoneNumber: "6412661133" },
-    { id: 4, name: "Borden", surname: "Pfeifer",  telephoneNumber: "9066694302" }
-]
+function runSQLite(SQLcommand){
+    const data = {};
 
-const subjects = [
-    { id: 1, subjectCode: "NCO-1",  title: "Programming I",           profID: 2 },
-    { id: 2, subjectCode: "NCO-2",  title: "Programming II",          profID: 4 },
-    { id: 3, subjectCode: "NBX-1",  title: "Algorithms I",            profID: 1 },
-    { id: 4, subjectCode: "NBX-2",  title: "Algorithms II",           profID: 1 },
-    { id: 5, subjectCode: "NBX-14", title: "Intro to Databases",      profID: 3 },
-    { id: 6, subjectCode: "NCC-34", title: "GraphQL with JavaScript", profID: 3 },
-]
+    db.all(SQLcommand, [], (err, rows) => {
+        if (err) return console.error(err.message);
+        data = rows
+    })
+    
+
+    db.close((err) => {
+        if (err) return console.error(err.message);
+    });
+
+    return data
+}
 
 const SubjectType = new GraphQLObjectType({
     name: "Subject",
@@ -37,7 +57,7 @@ const SubjectType = new GraphQLObjectType({
         professor: {
             type: ProfessorType,
             resolve: (subject) => {
-                return professors.find(professor => professor.id === subject.profID)
+                return db.get('SELECT * FROM professors WHERE id = ?', [subject.profID]);
             }
         }
     })
@@ -54,7 +74,8 @@ const ProfessorType = new GraphQLObjectType({
         subjects: {
             type: new GraphQLList(SubjectType),
             resolve: (professor) => {
-                return subjects.filter(subject => subject.profID === professor.id)
+                // return subjects.filter(subject => subject.profID === professor.id)
+                return db.all('SELECT * FROM subjects WHERE profID = ?', [professor.id]);
             }
         }
     })
@@ -67,7 +88,7 @@ const RootQueryType = new GraphQLObjectType({
         professors: {
             type: new GraphQLList(ProfessorType),
             description: "List of all professors",
-            resolve: () => professors
+            resolve: () => db.all('SELECT * FROM professors')
         },
         professor: {
             type: ProfessorType,
@@ -75,12 +96,12 @@ const RootQueryType = new GraphQLObjectType({
             args: {
                 id: {type: GraphQLInt}
             },
-            resolve: (parent, args) => professors.find(professor => professor.id === args.id)
+            resolve: (parent, args) => db.get('SELECT * FROM professors WHERE id = ?', [args.id])
         },
         subjects: {
             type: new GraphQLList(SubjectType),
             description: "List of all subjects",
-            resolve: () => subjects
+            resolve: () => db.all('SELECT * FROM subjects')
         },
         subject: {
             type: SubjectType,
@@ -88,7 +109,7 @@ const RootQueryType = new GraphQLObjectType({
             args: {
                 id: {type: GraphQLInt}
             },
-            resolve: (parent, args) => subjects.find(subject => subject.id === args.id)
+            resolve: (parent, args) => db.get('SELECT * FROM subjects WHERE id = ?', [args.id])
         }
     })
 })
@@ -105,30 +126,37 @@ const RootMutationType = new GraphQLObjectType({
                 surname: { type: GraphQLNonNull(GraphQLString)},
                 telephoneNumber: { type: GraphQLNonNull(GraphQLString)}
             },
-            resolve: (parent, args) => {
-                const professor = {id: professors.length + 1, name: args.name, surname: args.surname, telephoneNumber: args.telephoneNumber}
-                professors.push(professor)
-                return professor
+            resolve: async (parent, args) => {
+                const lastId = await db_run('INSERT INTO professors VALUES(NULL, ?, ?, ?)', [args.name, args.surname, args.telephoneNumber]);
+                return db.get('SELECT * FROM professors WHERE id = ?', [lastId]);
             }
-            
         },
         updateProfessor: {
             type: ProfessorType,
             description: "Update info on a professor",
             args: {
-                ChangeID: { type: GraphQLNonNull(GraphQLInt) },
+                id: { type: GraphQLNonNull(GraphQLInt) },
                 name: { type: GraphQLNonNull(GraphQLString)},
                 surname: { type: GraphQLNonNull(GraphQLString)},
                 telephoneNumber: { type: GraphQLNonNull(GraphQLString)}
             },
-            resolve: (parent, args) => {
-                const professor = professors.find(professor => professor.id === args.ChangeID)
-                professor.name = args.name
-                professor.surname = args.surname
-                professor.telephoneNumber = args.telephoneNumber
-                return professor
+            resolve: async (parent, args) => {
+                const lastId = await db_run('UPDATE professors SET name = ?, surname = ?, telephoneNumber = ? WHERE id = ?', [args.name, args.surname, args.telephoneNumber, args.id]);
+                return db.get('SELECT * FROM professors WHERE id = ?', [args.id]);
             }
         },
+        deleteProfessor: {
+            type: ProfessorType,
+            description: "Delete a professor",
+            args: {
+                id: { type: GraphQLNonNull(GraphQLInt) }
+            },
+            resolve: async (parent, args) => {
+                const lastId = await db_run('DELETE FROM professors WHERE id = ?', [args.id]);
+                return null;
+            }
+        },
+
         addSubject: {
             type: SubjectType,
             description: "Add a subject",
@@ -137,29 +165,36 @@ const RootMutationType = new GraphQLObjectType({
                 title: { type: GraphQLNonNull(GraphQLString) },
                 profID: { type: GraphQLNonNull(GraphQLInt) },
             },
-            resolve: (parent, args) => {
-                const subject = {id: subjects.length + 1, subjectCode: args.subjectCode, title: args.title, profID: args.profID}
-                subjects.push(subject)
-                return subject
+            resolve : async (parent, args) => {
+                const lastId = await db_run('INSERT INTO subjects VALUES(NULL, ?, ?, ?)', [args.subjectCode, args.title, args.profID]);
+                return db.get('SELECT * FROM subjects WHERE id = ?', [lastId]);
             }
         },
         updateSubject: {
             type: SubjectType,
             description: "Update info on a subject",
             args: {
-                ChangeID: { type: GraphQLNonNull(GraphQLInt) },
+                id: { type: GraphQLNonNull(GraphQLInt) },
                 subjectCode: { type: GraphQLNonNull(GraphQLString) },
                 title: { type: GraphQLNonNull(GraphQLString) },
                 profID: { type: GraphQLNonNull(GraphQLInt) }
             },
-            resolve: (parent, args) => {
-                const subject = subjects.find(subject => subject.id === args.ChangeID)
-                subject.subjectCode = args.subjectCode
-                subject.title = args.title
-                subject.profID = args.profID
-                return subject
+            resolve: async (parent, args) => {
+                const lastId = await db_run('UPDATE subjects SET subjectCode = ?, title = ?, profID = ? WHERE id = ?', [args.subjectCode, args.title, args.profID, args.id]);
+                return db.get('SELECT * FROM subjects WHERE id = ?', [args.id]);
             }
-        }       
+        },
+        deleteSubject: {
+            type: SubjectType,
+            description: "Delete a subject",
+            args: {
+                id: { type: GraphQLNonNull(GraphQLInt) }
+            },
+            resolve: async (parent, args) => {
+                const lastId = await db_run('DELETE FROM subjects WHERE id = ?', [args.id]);
+                return null;
+            }
+        }            
     })
 })
 
